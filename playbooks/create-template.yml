@@ -1,0 +1,8 @@
+---
+- name: Create cloud-init VM template
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../group_vars/all.yml
+  roles:
+    - cloudinit_template

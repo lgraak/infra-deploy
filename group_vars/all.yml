@@ -1,0 +1,2 @@
+proxmox_storage: "proxmox-vmstore"
+proxmox_template_dir: "/var/lib/vz/template/qcow2"

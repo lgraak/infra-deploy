@@ -1,0 +1,64 @@
+# roles/cloudinit_template/tasks/main.yml
+
+- name: Ensure cloud image is present on Proxmox node
+  ansible.builtin.shell: |
+    test -f {{ proxmox_template_dir }}/{{ filename }} || wget -O {{ proxmox_template_dir }}/{{ filename }} {{ base_url }}{{ filename }}
+  args:
+    executable: /bin/bash
+  delegate_to: "{{ target_node }}"
+
+- name: Create VM shell
+  ansible.builtin.shell: >
+    qm create {{ vmid }} --name {{ template_name }}
+    --memory {{ ram }} --cores {{ cpu }}
+    --net0 virtio,bridge=vmbr0{{ ',tag=' + vlan_tag if vlan_tag else '' }}
+    --scsihw virtio-scsi-pci
+  args:
+    creates: "/etc/pve/qemu-server/{{ vmid }}.conf"
+  delegate_to: "{{ target_node }}"
+
+- name: Import disk image
+  ansible.builtin.shell: >
+    qm importdisk {{ vmid }} {{ proxmox_template_dir }}/{{ filename }} {{ proxmox_storage }}
+  delegate_to: "{{ target_node }}"
+
+- name: Get imported disk name from VM config
+  ansible.builtin.uri:
+    url: "https://{{ target_node }}:8006/api2/json/nodes/{{ target_node }}/qemu/{{ vmid }}/config"
+    method: GET
+    validate_certs: no
+    headers:
+      Authorization: "PVEAPIToken=root@pam!ansible={{ lookup('env','PROXMOX_API_TOKEN') }}"
+  register: vm_config_json
+
+- name: Set imported disk as scsi0
+  ansible.builtin.shell: >
+    qm set {{ vmid }} --scsi0 {{ vm_config_json.json.data.unused0 }}
+  delegate_to: "{{ target_node }}"
+
+- name: Attach cloud-init drive
+  ansible.builtin.shell: >
+    qm set {{ vmid }} --ide2 {{ proxmox_storage }}:cloudinit
+  delegate_to: "{{ target_node }}"
+
+- name: Set cloud-init options
+  ansible.builtin.shell: >
+    qm set {{ vmid }} --ciuser {{ ciuser }} --cipassword {{ cipassword }}
+    {% if sshkeys is defined and sshkeys != '' %} --sshkeys "{{ sshkeys }}" {% endif %}
+    --ipconfig0 ip=dhcp
+  delegate_to: "{{ target_node }}"
+
+- name: Enable QEMU agent and serial console
+  ansible.builtin.shell: >
+    qm set {{ vmid }} --agent enabled=1 --serial0 socket --vga serial0
+  delegate_to: "{{ target_node }}"
+
+- name: Resize disk
+  ansible.builtin.shell: >
+    qm resize {{ vmid }} scsi0 {{ disk }}G
+  delegate_to: "{{ target_node }}"
+
+- name: Convert VM to template
+  ansible.builtin.shell: >
+    qm template {{ vmid }}
+  delegate_to: "{{ target_node }}"
